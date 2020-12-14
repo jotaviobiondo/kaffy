@@ -283,32 +283,33 @@ defmodule KaffyWeb.ResourceController do
   def delete(conn, %{"context" => context, "resource" => resource, "id" => id}) do
     my_resource = Kaffy.Utils.get_resource(conn, context, resource)
 
-    case can_proceed?(my_resource, conn) do
-      false ->
-        unauthorized_access(conn)
+    with {:permitted, true} <- {:permitted, can_proceed?(my_resource, conn)},
+         {:enabled, true} <- {:enabled, is_enabled?(my_resource, :delete)}
+    do
+      entry = Kaffy.ResourceQuery.fetch_resource(conn, my_resource, id)
 
-      true ->
-        entry = Kaffy.ResourceQuery.fetch_resource(conn, my_resource, id)
+      case Kaffy.ResourceCallbacks.delete_callbacks(conn, my_resource, entry) do
+        {:ok, _deleted} ->
+          put_flash(conn, :success, "The record was deleted successfully")
+          |> redirect(
+            to: Kaffy.Utils.router().kaffy_resource_path(conn, :index, context, resource)
+          )
 
-        case Kaffy.ResourceCallbacks.delete_callbacks(conn, my_resource, entry) do
-          {:ok, _deleted} ->
-            put_flash(conn, :success, "The record was deleted successfully")
-            |> redirect(
-              to: Kaffy.Utils.router().kaffy_resource_path(conn, :index, context, resource)
-            )
+        {:error, %Ecto.Changeset{} = _changeset} ->
+          put_flash(
+            conn,
+            :error,
+            "A database-related issue prevented this record from being deleted."
+          )
+          |> redirect_to_resource(context, resource, entry)
 
-          {:error, %Ecto.Changeset{} = _changeset} ->
-            put_flash(
-              conn,
-              :error,
-              "A database-related issue prevented this record from being deleted."
-            )
-            |> redirect_to_resource(context, resource, entry)
-
-          {:error, {_entry, error}} when is_binary(error) ->
-            put_flash(conn, :error, error)
-            |> redirect_to_resource(context, resource, entry)
-        end
+        {:error, {_entry, error}} when is_binary(error) ->
+          put_flash(conn, :error, error)
+          |> redirect_to_resource(context, resource, entry)
+      end
+    else
+      {:permitted, false} -> unauthorized_access(conn)
+      {:enabled, false} -> not_enabled(conn)
     end
   end
 
